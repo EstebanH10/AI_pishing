@@ -43,8 +43,29 @@ def get_tld_risk(url):
 # 3. MOTOR DE PREDICCIÓN (PRODUCCIÓN)
 # ==========================================
 def predict_url(url):
-    # --- A. EXTRACCIÓN DE CARACTERÍSTICAS ---
+    # --- 0. EXTRACCIÓN BÁSICA Y LISTA BLANCA ESTRUCTURADA ---
     ext = tldextract.extract(url)
+    dominio_raiz = f"{ext.domain}.{ext.suffix}"
+    
+    # A. Verificamos si es nuestra propia nube o herramientas de desarrollo vitales
+    lista_blanca_desarrollo = {"render.com", "vercel.app", "pages.dev", "github.io"}
+    if dominio_raiz in lista_blanca_desarrollo:
+        # Solo aprobamos si es la raíz o un subdominio corto, no si tiene guiones raros
+        if ext.subdomain.count('-') == 0:
+            return "LEGIT (Infraestructura de Desarrollo)", 0.0, -1
+
+    # B. ESCUDO TRANCO TOP 10K (El filtro principal)
+    if dominio_raiz in TOP_10K_TRANCO:
+        # Micro-filtro de seguridad para evitar ataques de Open Redirect en sitios famosos
+        ruta_sospechosa = url.count('/') >= 5
+        tiene_redireccion = any(kw in url.lower() for kw in ['redirect', 'url=', 'goto=', 'return='])
+        
+        if not ruta_sospechosa and not tiene_redireccion:
+            # Si es un dominio famoso y su URL se ve normal, lo aprobamos en 1 milisegundo
+            return "LEGIT (Tranco Top Global)", 0.0, -1
+        # Si tiene parámetros raros, ignoramos el Tranco y dejamos que la IA lo analice abajo
+
+    # --- A. EXTRACCIÓN DE CARACTERÍSTICAS ---
     tld = ext.suffix
     tld_risk = get_tld_risk(url)
     
@@ -57,10 +78,8 @@ def predict_url(url):
     orden_columnas = feature_metadata["lexical"] + feature_metadata["advanced"]
     vector_numerico = [all_features.get(col, 0) for col in orden_columnas]
     
-    # Creamos el DataFrame para alinear nombres, pero...
+    # Creamos el DataFrame para alinear nombres, pero pasamos .values al scaler
     X_num = pd.DataFrame([vector_numerico], columns=orden_columnas)
-    
-    # ¡SOLUCIÓN DEL WARNING!: Pasamos .values al scaler
     X_num_scaled = scaler.transform(X_num.values) 
     
     # Vectorizamos el texto y unimos
@@ -106,8 +125,6 @@ def predict_url(url):
         # 2. Intento de robar una marca (Damos margen > 0.4 para evitar colisiones raras)
         if brand > 0.4:
             return "PHISHING (Suplanta Marca en Nube Gratuita)", prob, age
-            
-        # (ELIMINAMOS la regla de prob > 0.15 para no castigar a los desarrolladores legítimos)
 
     # REGLA 2: ESCUDO INSTITUCIONAL OFICIAL
     if any(suffix in tld for suffix in ["edu", "gov"]):
@@ -121,9 +138,9 @@ def predict_url(url):
     elif (brand > 0.6 or brand == 1.0) and prob > 0.15: # Bajamos umbral de IA si hay marca
         return f"PHISHING (Suplanta a {marca_detectada})", prob, age
 
-    # REGLA 4: WHITELIST DINÁMICA
-    dominio_base = f"{ext.domain}.{ext.suffix}" 
-    if dominio_base in TOP_10K_TRANCO:
+    # REGLA 4: WHITELIST DINÁMICA (Tranco Top 10k)
+    # Nota: Estos se analizan con IA por si el sitio Top 10k fue hackeado (Open Redirect)
+    if dominio_raiz in TOP_10K_TRANCO:
         if prob > 0.90 and (ruta_profunda or tiene_numero_largo):
             return "PHISHING (Sitio Legítimo Hackeado / Open Redirect)", prob, age
         return "LEGIT (Top Global Tranco)", prob, age
