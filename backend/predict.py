@@ -46,6 +46,26 @@ def predict_url(url):
     # --- 0. EXTRACCIÓN BÁSICA Y LISTA BLANCA ESTRUCTURADA ---
     ext = tldextract.extract(url)
     dominio_raiz = f"{ext.domain}.{ext.suffix}"
+
+    # NUEVO: ESCUDO DE SINGLE SIGN-ON (SSO) / OAUTH2
+    # Identificamos los proveedores de identidad (IdP) mundiales más comunes
+    proveedores_sso = [
+            "login.microsoftonline.com", 
+            "accounts.google.com", 
+            "appleid.apple.com", 
+            "okta.com", 
+            "auth0.com",
+            "sso.canvaslms.com"
+        ]
+        
+    if any(idp in url for idp in proveedores_sso):
+            # Verificamos si la URL tiene la "anatomía" exacta de un inicio de sesión legítimo
+            es_oauth = "client_id=" in url and ("redirect_uri=" in url or "redirect=" in url)
+            es_saml = "SAMLRequest=" in url
+            
+            if es_oauth or es_saml:
+                # Si cumple con el protocolo de identidad, es seguro. Ignoramos a la IA.
+                return "LEGIT (Flujo de Autenticación SSO Seguro)", 0.0, -1
     
     # A. Verificamos si es nuestra propia nube o herramientas de desarrollo vitales
     lista_blanca_desarrollo = {"render.com", "vercel.app", "pages.dev", "github.io"}
