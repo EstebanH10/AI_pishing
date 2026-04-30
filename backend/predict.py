@@ -12,7 +12,6 @@ from advanced_features import extract_advanced_features
 
 # ==========================================
 # 1. CARGA DE MODELOS Y RECURSOS EN MEMORIA
-# (Esto simula el arranque de un servidor)
 # ==========================================
 model = joblib.load("models/advanced_phishing_model.pkl")
 vectorizer = joblib.load("models/ngram_vectorizer.pkl")
@@ -24,13 +23,19 @@ scaler = joblib.load("models/scaler.pkl")
 tld_risk_df = pd.read_csv("./data/tld_risk.csv")
 tld_risk_dict = dict(zip(tld_risk_df['tld'], tld_risk_df['risk_score']))
 
-# --- NUEVO: Cargar Whitelist Dinámica (Tranco Top 10k) ---
-TRANCO_PATH = "./data/top_10k_tranco.csv"
+# Cargar Whitelist Dinámica (Tranco Top 10k)
+TRANCO_PATH = "./data/top_1m_tranco.csv"
 if os.path.exists(TRANCO_PATH):
     TOP_10K_TRANCO = set(pd.read_csv(TRANCO_PATH)['domain'])
 else:
     print(f"[!] Aviso: No se encontró {TRANCO_PATH}. Usando fallback temporal.")
     TOP_10K_TRANCO = {"google.com", "youtube.com", "chatgpt.com", "microsoft.com"}
+
+# Dominios Institucionales/Educativos base (Máxima Confianza)
+DOMINIOS_INSTITUCIONALES = {"uniminuto.edu", "instructure.com", "canvaslms.com", "stepbible.org"}
+
+# Proveedores de infraestructura/servicios vitales (Confianza Alta)
+PROVEEDORES_CONFIABLES = {"zoom.us", "render.com", "vercel.app", "pages.dev", "myedit.online", "github.com"}
 
 # ==========================================
 # 2. FUNCIONES DE APOYO
@@ -40,52 +45,31 @@ def get_tld_risk(url):
     return tld_risk_dict.get(ext.suffix, 0.5)
 
 # ==========================================
-# 3. MOTOR DE PREDICCIÓN (PRODUCCIÓN)
+# 3. MOTOR DE PREDICCIÓN (PRODUCCIÓN V4)
 # ==========================================
 def predict_url(url):
-    # --- 0. EXTRACCIÓN BÁSICA Y LISTA BLANCA ESTRUCTURADA ---
+    # --- 0. EXTRACCIÓN BÁSICA ---
     ext = tldextract.extract(url)
     dominio_raiz = f"{ext.domain}.{ext.suffix}"
-
-    # NUEVO: ESCUDO DE SINGLE SIGN-ON (SSO) / OAUTH2
-    # Identificamos los proveedores de identidad (IdP) mundiales más comunes
-    proveedores_sso = [
-            "login.microsoftonline.com", 
-            "accounts.google.com", 
-            "appleid.apple.com", 
-            "okta.com", 
-            "auth0.com",
-            "sso.canvaslms.com"
-        ]
-        
-    if any(idp in url for idp in proveedores_sso):
-            # Verificamos si la URL tiene la "anatomía" exacta de un inicio de sesión legítimo
-            es_oauth = "client_id=" in url and ("redirect_uri=" in url or "redirect=" in url)
-            es_saml = "SAMLRequest=" in url
-            
-            if es_oauth or es_saml:
-                # Si cumple con el protocolo de identidad, es seguro. Ignoramos a la IA.
-                return "LEGIT (Flujo de Autenticación SSO Seguro)", 0.0, -1
     
-    # A. Verificamos si es nuestra propia nube o herramientas de desarrollo vitales
-    lista_blanca_desarrollo = {"render.com", "vercel.app", "pages.dev", "github.io"}
-    if dominio_raiz in lista_blanca_desarrollo:
-        # Solo aprobamos si es la raíz o un subdominio corto, no si tiene guiones raros
-        if ext.subdomain.count('-') == 0:
-            return "LEGIT (Infraestructura de Desarrollo)", 0.0, -1
-
-    # B. ESCUDO TRANCO TOP 10K (El filtro principal)
-    if dominio_raiz in TOP_10K_TRANCO:
-        # Micro-filtro de seguridad para evitar ataques de Open Redirect en sitios famosos
-        ruta_sospechosa = url.count('/') >= 5
-        tiene_redireccion = any(kw in url.lower() for kw in ['redirect', 'url=', 'goto=', 'return='])
+    # --- 1. DETERMINAR NIVEL DE CONFIANZA DEL DOMINIO RAÍZ ---
+    nivel_confianza = "normal"
+    
+    if dominio_raiz in TOP_10K_TRANCO or dominio_raiz in PROVEEDORES_CONFIABLES:
+        nivel_confianza = "alto"
         
-        if not ruta_sospechosa and not tiene_redireccion:
-            # Si es un dominio famoso y su URL se ve normal, lo aprobamos en 1 milisegundo
-            return "LEGIT (Tranco Top Global)", 0.0, -1
-        # Si tiene parámetros raros, ignoramos el Tranco y dejamos que la IA lo analice abajo
+    if ext.suffix == "edu" or ext.suffix == "gov" or dominio_raiz in DOMINIOS_INSTITUCIONALES:
+        nivel_confianza = "muy_alto"
 
-    # --- A. EXTRACCIÓN DE CARACTERÍSTICAS ---
+    # --- 2. ESCUDO DE SINGLE SIGN-ON (SSO) / OAUTH2 ---
+    # Los flujos de login oficiales SIEMPRE se aprueban para no romper accesos
+    proveedores_sso = ["login.microsoftonline.com", "accounts.google.com", "appleid.apple.com", "okta.com", "auth0.com", "sso.canvaslms.com"]
+    if any(idp in url for idp in proveedores_sso):
+        es_oauth = "client_id=" in url and ("redirect_uri=" in url or "redirect=" in url)
+        if es_oauth or "SAMLRequest=" in url:
+            return "LEGIT (Flujo de Autenticación SSO)", 0.0, -1
+
+    # --- 3. EXTRACCIÓN DE CARACTERÍSTICAS PARA LA IA ---
     tld = ext.suffix
     tld_risk = get_tld_risk(url)
     
@@ -93,140 +77,102 @@ def predict_url(url):
     adv, marca_detectada = extract_advanced_features(url)
     adv['tld_risk'] = tld_risk 
 
-    # --- B. PROCESAMIENTO IA ---
+    # --- 4. PROCESAMIENTO IA ---
     all_features = {**lex, **adv}
     orden_columnas = feature_metadata["lexical"] + feature_metadata["advanced"]
     vector_numerico = [all_features.get(col, 0) for col in orden_columnas]
     
-    # Creamos el DataFrame para alinear nombres, pero pasamos .values al scaler
     X_num = pd.DataFrame([vector_numerico], columns=orden_columnas)
     X_num_scaled = scaler.transform(X_num.values) 
     
-    # Vectorizamos el texto y unimos
     X_ngram = vectorizer.transform([url])
     X_final = hstack([csr_matrix(X_num_scaled), X_ngram])
     
-    # Obtenemos la probabilidad cruda de la IA
     prob = model.predict_proba(X_final)[0][1]
 
-    # --- C. MOTOR DE REGLAS Y DEFENSA EN PROFUNDIDAD ---
+    # --- 5. AJUSTE DINÁMICO DE UMBRALES (HERENCIA DE CONFIANZA) ---
     age = adv.get('domain_age_days', -1)
     brand = adv.get('brand_similarity_score', 0)
     
-    # 1. Expandimos palabras clave (Psicología de ataque)
     keywords_peligrosas = ['swap', 'btc', 'crypto', 'wallet', 'login', 'gouv', 'verify', 'links']
     contiene_keyword = any(kw in url.lower() for kw in keywords_peligrosas)
-
-    # 2. Análisis Estructural Profundo
     es_dominio_numerico = ext.domain.isdigit() 
-    tiene_numero_largo = bool(re.search(r'\d{10,}', url)) 
-    ruta_profunda = url.count('/') >= 5 
+    
+    # Partimos del umbral base
+    umbral_bloqueo = threshold_security 
+    
+    if nivel_confianza == "muy_alto":
+        umbral_bloqueo = 0.99 # Extremadamente tolerante (Universidades/Gobierno)
+    elif nivel_confianza == "alto":
+        umbral_bloqueo = 0.95 # Tolerante a URLs largas (Tranco, Zoom, Apps)
+    else:
+        # Si es un dominio desconocido ("normal"), somos más agresivos
+        if tld_risk > 0.5 or contiene_keyword:
+            umbral_bloqueo = min(umbral_bloqueo, 0.60)
 
-    # 3. Umbral dinámico asegurado
-    umbral_base = min(threshold_security, 0.75) 
-    umbral_estricto = umbral_base * 0.6 if (tld_risk > 0.4 or contiene_keyword) else umbral_base
+    # Excepción Crítica: Open Redirect (El único peligro real en sitios confiables)
+    es_open_redirect = any(kw in url.lower() for kw in ['url=http', 'redirect=http', 'return=http', 'goto=http'])
+    if nivel_confianza in ["alto", "muy_alto"] and es_open_redirect:
+         # Si un sitio confiable redirige hacia afuera, bajamos sus defensas y somos estrictos
+         umbral_bloqueo = min(threshold_security * 0.8, 0.60)
 
-    # --- REGLAS PRIORIZADAS (NIVEL PRODUCCIÓN V3) ---
+    # --- 6. MOTOR DE REGLAS FINALES ---
 
-    # REGLA 0: ANOMALÍAS ESTRUCTURALES GRAVES
+    # Anomalía absoluta insalvable
     if es_dominio_numerico:
         return "PHISHING (Dominio 100% Numérico)", prob, age
 
-    # REGLA 1: ESCUDO ESTRUCTURAL PARA NUBES GRATUITAS
-    subdomain_providers = ["pages.dev", "vercel.app", "workers.dev", "netlify.app", "github.io", "onrender.com"]
-    
-    if any(provider in url for provider in subdomain_providers):
-        guiones = ext.subdomain.count('-')
-        
-        # 1. Estructura anómala típica de Phishing (Muchos guiones)
-        if guiones >= 2:
-            return "PHISHING (Estructura Anómala en Nube Gratuita)", prob, age
-            
-        # 2. Intento de robar una marca (Damos margen > 0.4 para evitar colisiones raras)
-        if brand > 0.4:
-            return "PHISHING (Suplanta Marca en Nube Gratuita)", prob, age
+    # Evaluaciones para dominios desconocidos/sospechosos
+    if nivel_confianza == "normal":
+        # Nubes gratuitas anómalas
+        subdomain_providers = ["pages.dev", "vercel.app", "workers.dev", "netlify.app", "github.io", "onrender.com"]
+        if any(provider in url for provider in subdomain_providers):
+            if ext.subdomain.count('-') >= 2:
+                return "PHISHING (Estructura Anómala en Nube Gratuita)", prob, age
+            if brand > 0.4:
+                return "PHISHING (Suplanta Marca en Nube Gratuita)", prob, age
 
-    # REGLA 2: ESCUDO INSTITUCIONAL OFICIAL
-    if any(suffix in tld for suffix in ["edu", "gov"]):
-        if prob > 0.90 and ruta_profunda:
-            return "PHISHING (Institución Hackeada)", prob, age
-        return "LEGIT (Institución Oficial)", prob, age
+        # Suplantación de Marca Pura
+        if brand >= 0.85:
+            return f"PHISHING (Homoglifo Severo de {marca_detectada})", prob, age
 
-    # REGLA 3: SUPLANTACIÓN DE MARCA Y HOMOGLIFOS
-    if brand >= 0.85:
-        return f"PHISHING (Homoglifo Severo de {marca_detectada})", prob, age
-    elif (brand > 0.6 or brand == 1.0) and prob > 0.15: # Bajamos umbral de IA si hay marca
-        return f"PHISHING (Suplanta a {marca_detectada})", prob, age
+        # Dominios nuevos ocultos con keywords
+        if (age < 90 or age == -1) and contiene_keyword:
+            return "PHISHING (Keyword en Dominio Nuevo/Oculto)", prob, age
 
-    # REGLA 4: WHITELIST DINÁMICA (Tranco Top 10k)
-    # Nota: Estos se analizan con IA por si el sitio Top 10k fue hackeado (Open Redirect)
-    if dominio_raiz in TOP_10K_TRANCO:
-        if prob > 0.90 and (ruta_profunda or tiene_numero_largo):
-            return "PHISHING (Sitio Legítimo Hackeado / Open Redirect)", prob, age
-        return "LEGIT (Top Global Tranco)", prob, age
+    # --- 7. DECISIÓN FINAL IA BASADA EN EL UMBRAL DINÁMICO ---
+    if prob >= umbral_bloqueo:
+        razon = f"Prob IA: {prob:.2f} > Umbral: {umbral_bloqueo:.2f}"
+        if nivel_confianza in ["alto", "muy_alto"]:
+             razon = "Sitio Confiable Comprometido (Open Redirect/Anomalía Grave)"
+        return f"PHISHING ({razon})", prob, age
 
-    # REGLA 5: ABUSO DE TRACKERS
-    if tiene_numero_largo and ("link" in url.lower() or "click" in url.lower()):
-        return "PHISHING (Abuso de Tracker/Redirección)", prob, age
-
-    # REGLA 6: DOMINIOS NUEVOS O CON WHOIS FALLIDO
-    if age < 90 or age == -1:
-        if contiene_keyword:
-            if age != -1 and age < 90: 
-                return "PHISHING (Keyword en Dominio Nuevo)", prob, age
-            elif age == -1 and prob > 0.20:
-                return "PHISHING (Keyword en Dominio Oculto)", prob, age
-        
-        # Si el TLD es riesgoso y no tenemos edad, confiamos más en la IA
-        if tld_risk > 0.6 and prob > 0.25:
-             return f"PHISHING (TLD Riesgoso: {tld})", prob, age
-
-    # REGLA 7: DECISIÓN FINAL IA
-    if prob >= umbral_estricto:
-        return "PHISHING (Detectado por IA)", prob, age
-
-    return "LEGIT (Evaluación Limpia)", prob, age
+    return f"LEGIT (Confianza: {nivel_confianza})", prob, age
 
 # ==========================================
 # 4. PRUEBA DE EJECUCIÓN
 # ==========================================
 if __name__ == "__main__":
     import warnings
-    warnings.filterwarnings("ignore") # Limpia cualquier warning residual
+    warnings.filterwarnings("ignore") 
     
     urls = [
         "https://www.youtube.com/",
-        "https://unlswap-v3.si/",
         "https://app.uniswap.org/",
         "https://chatgpt.com/",
-        "http://allegro.12881010s-1.biz/",
-        "http://pyruvylnfusarial.info",
-        "https://app.campanha-brasil.click/contato/fisica",
-        "https://gemini.google.com/app/8739db2d7432c637?hl=es",
-        "https://www.stepbible.org/?q=version=LBLA",
-        "https://odontoclinicasmr.com/",
-        "https://btc089.77768.cc/#/",
-        "https://cpam-gouvfr.com/",
-        "http://meritking-1697.com",
-        "https://www.verifypof.us/",
-        "https://login.bakewarestorage.com/cmhnkaod",
-        "https://links.truthsocial.com/link/116176749744825965",
-        "https://ln.run/ZzJig",
-        "https://shopy.com.pk/ssy/web/ali/",
-        "https://mondrelay.maa-rasa.co/index.php",
-        "https://www.pmal-cadastro.online/",
-        "https://sura-enlinea.co/",
-        "https://eufutureweb.info/AOVr0RWO.html",
-        "https://my.harver.com/app/landing/6758650591aacc0012a41bdd/login?fbclid=IwAR7i05g4tGuDYe5qllZKvks_wBcQ-GjAf4O0rJoLzhrvj8GDRatsPoGCJyTvEQ_wapm_MzQ2MWQ1OGEtMzkwOS00NzlkLWE3M2MtN2M1YjhlYjhlNDQ2_waaem_BxBb0-icjbBJyCctAeLSIg",
-        # --- PRUEBAS AVANZADAS ---
-        "https://www.googIe.com", # Homoglifo (i mayúscula en vez de L)
-        "https://login-secure-bancolombia.update-x29.xyz/", # Subdominio abusivo
+        "https://miaulavirtual.uniminuto.edu/login/canvas", # Prueba de universidad
+        "https://login.microsoftonline.com/b1ba85eb-a253-4467/oauth2/v2.0/authorize?client_id=123&redirect_uri=sso.canvas", # Prueba de SSO
+        "https://app.zoom.us/wc/84777825246/join?ref_from=launch&uname=ESTEBAN", # Prueba de Zoom (URL profunda)
+        "https://app.biblearc.com/project/e56dc4f7-1e1e-4c6e-8852", # Prueba UUID
+        "https://myedit.online/es/audio-editor/speech-enhancement",
+        "https://unlswap-v3.si/", # Phishing real
+        "http://allegro.12881010s-1.biz/", # Phishing real
+        "https://login-secure-bancolombia.update-x29.xyz/", # Phishing real bancario
     ]
     
-    print(f"\n{'URL':<50} | {'RESULTADO':<35} | {'PROB':<6} | {'EDAD'}")
-    print("-" * 110)
+    print(f"\n{'URL':<65} | {'RESULTADO':<45} | {'PROB':<5}")
+    print("-" * 125)
     
     for u in urls:
         res, p, dias = predict_url(u)
-        edad_str = f"{dias} días" if dias != -1 else "Desconocida"
-        print(f"{u[:48]:<50} | {res:<35} | {p:.4f} | {edad_str}")
+        print(f"{u[:63]:<65} | {res:<45} | {p:.2f}")
