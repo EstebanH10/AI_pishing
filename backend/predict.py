@@ -6,7 +6,13 @@ import re
 import os
 from scipy.sparse import hstack, csr_matrix
 
-# Importamos tus extractores
+# --- Silenciamos las advertencias de versión de Scikit-Learn ---
+import warnings
+from sklearn.exceptions import InconsistentVersionWarning
+warnings.filterwarnings("ignore", category=InconsistentVersionWarning)
+# ----------------------------------------------------------------------
+
+# Importamos extractores
 from feature_extraction import extract_url_features
 from advanced_features import extract_advanced_features
 
