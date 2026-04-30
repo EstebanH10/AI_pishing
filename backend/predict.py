@@ -26,7 +26,11 @@ tld_risk_dict = dict(zip(tld_risk_df['tld'], tld_risk_df['risk_score']))
 # Cargar Whitelist Dinámica (Tranco Top 1m)
 TRANCO_PATH = "./data/top_1m_tranco.csv"
 if os.path.exists(TRANCO_PATH):
-    TOP_10K_TRANCO = set(pd.read_csv(TRANCO_PATH)['domain'])
+    # CORRECCIÓN: Le decimos a pandas que el archivo no tiene cabeceras y se las asignamos
+    df_tranco = pd.read_csv(TRANCO_PATH, header=None, names=['rank', 'domain'])
+    # Tomamos los primeros 100,000 para no saturar la memoria
+    TOP_10K_TRANCO = set(df_tranco.head(100000)['domain'])
+    print(f"[*] Lista Blanca Tranco cargada con {len(TOP_10K_TRANCO)} dominios.")
 else:
     print(f"[!] Aviso: No se encontró {TRANCO_PATH}. Usando fallback temporal.")
     TOP_10K_TRANCO = {"google.com", "youtube.com", "chatgpt.com", "microsoft.com"}
