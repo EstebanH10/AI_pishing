@@ -1,25 +1,66 @@
 <!DOCTYPE html>
-<html>
+<html lang="es">
 <head>
     <meta charset="UTF-8">
-    <title>¡Sitio Bloqueado!</title>
+    <title>Intervención de Seguridad</title>
     <style>
-        body { margin: 0; background-color: #d93025; color: white; display: flex; flex-direction: column; justify-content: center; align-items: center; height: 100vh; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; text-align: center; padding: 20px;}
+        body { 
+            margin: 0; 
+            /* El color de fondo cambiará por JS dependiendo de si es advertencia o bloqueo */
+            background-color: #d93025; 
+            color: white; 
+            display: flex; 
+            flex-direction: column; 
+            justify-content: center; 
+            align-items: center; 
+            height: 100vh; 
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; 
+            text-align: center; 
+            padding: 20px;
+        }
         h1 { font-size: 50px; margin-bottom: 10px; }
         p { font-size: 20px; max-width: 600px; }
-        button { margin-top: 30px; padding: 15px 30px; font-size: 18px; font-weight: bold; background-color: white; color: #d93025; border: none; border-radius: 5px; cursor: pointer;}
+        .botones { margin-top: 30px; display: flex; flex-direction: column; gap: 15px; }
+        
+        #btnVolver { 
+            padding: 15px 30px; 
+            font-size: 18px; 
+            font-weight: bold; 
+            background-color: white; 
+            color: #d93025; /* Este color también se ajusta en JS */
+            border: none; 
+            border-radius: 5px; 
+            cursor: pointer;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.2);
+        }
+        
+        #btnContinuar { 
+            padding: 10px 20px; 
+            font-size: 14px; 
+            background: transparent; 
+            color: white; 
+            border: 1px solid rgba(255,255,255,0.5); 
+            border-radius: 5px; 
+            cursor: pointer;
+            text-decoration: underline;
+        }
+        #btnContinuar:hover { background-color: rgba(255,255,255,0.1); }
     </style>
 </head>
 <body>
-    <h1>⚠️ Sitio Engañoso Detectado</h1>
-    <p>
-        Phishing Shield AI ha bloqueado esta página de manera proactiva. <br><br>
-        <strong>Motivo de la IA:</strong> <span id="motivo">Cargando...</span> <br>
-        <strong>Riesgo:</strong> <span id="riesgo">...</span>%
+    <h1 id="titulo">⚠️ Sitio Peligroso Detectado</h1>
+    <p id="subtitulo">Phishing Shield AI ha bloqueado esta página de manera proactiva.</p>
+    
+    <p style="font-size: 16px; background: rgba(0,0,0,0.2); padding: 15px; border-radius: 8px;">
+        <strong>Motivo:</strong> <span id="motivo">Cargando...</span> <br>
+        <strong>Riesgo detectado:</strong> <span id="riesgo">...</span>%
     </p>
-    <button id="btnVolver">Regresar a un lugar seguro</button>
+
+    <div class="botones">
+        <button id="btnVolver">Regresar a un lugar seguro</button>
+        <button id="btnContinuar">Continuar bajo mi propio riesgo</button>
+    </div>
 
     <script src="blocked.js"></script>
-     
 </body>
 </html>
