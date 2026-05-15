@@ -5,8 +5,8 @@ from typing import Optional
 from predict import predict_url
 import uvicorn
 import traceback
+import requests # <--- NUEVO: Necesario para hablar con JSONBin
 import json
-import os
 
 app = FastAPI(title="Phishing Shield API")
 
@@ -19,17 +19,28 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# --- NUEVO: SISTEMA DE ESTADÍSTICAS GLOBALES ---
-STATS_FILE = "./data/stats.json"
+# --- NUEVO: SISTEMA DE ESTADÍSTICAS PERSISTENTES EN LA NUBE ---
+BIN_ID = "6a07b18c250b1311c35830c6"
+API_KEY = "$2a$10$vyStvDvrN.aomDsI93GRQu3P8HIQibijfb0/ZnuiXRe1Rx.X0NTeG"
+
+JSONBIN_URL = f"https://api.jsonbin.io/v3/b/{BIN_ID}"
+
+# Estos headers envían tu llave secreta en cada petición
+HEADERS = {
+    'X-Master-Key': API_KEY,
+    'Content-Type': 'application/json'
+}
 
 def load_stats():
-    # Si el archivo existe, lo leemos. Si no, creamos los contadores desde cero.
-    if os.path.exists(STATS_FILE):
-        try:
-            with open(STATS_FILE, "r") as f:
-                return json.load(f)
-        except:
-            pass
+    # Leemos los datos directamente desde la nube
+    try:
+        req = requests.get(JSONBIN_URL, headers=HEADERS)
+        if req.status_code == 200:
+            return req.json()['record']
+    except Exception as e:
+        print(f"Error leyendo estadísticas de la nube: {e}")
+        
+    # Fallback si falla el internet o las credenciales
     return {
         "total_enlaces_analizados": 0, 
         "ataques_bloqueados": 0, 
@@ -38,10 +49,11 @@ def load_stats():
     }
 
 def save_stats(stats):
-    # Guardamos los números en el archivo
-    os.makedirs(os.path.dirname(STATS_FILE), exist_ok=True)
-    with open(STATS_FILE, "w") as f:
-        json.dump(stats, f, indent=4)
+    # Usamos PUT para sobreescribir el archivo en la nube con los nuevos números
+    try:
+        requests.put(JSONBIN_URL, json=stats, headers=HEADERS)
+    except Exception as e:
+        print(f"Error guardando estadísticas en la nube: {e}")
 # -----------------------------------------------
 
 class URLRequest(BaseModel):
@@ -62,7 +74,7 @@ async def analyze_url(request: URLRequest):
     try:
         resultado, prob, edad, accion = predict_url(request.url, request.origen) 
         
-        # --- NUEVO: REGISTRAR LA ESTADÍSTICA ---
+        # --- REGISTRAR LA ESTADÍSTICA ---
         stats = load_stats()
         stats["total_enlaces_analizados"] += 1
         
@@ -88,7 +100,7 @@ async def analyze_url(request: URLRequest):
         print("--------------------------------\n")
         raise HTTPException(status_code=500, detail=str(e))
 
-# --- NUEVO: RUTA PARA VER TU REPORTE EN VIVO ---
+# --- RUTA PARA VER TU REPORTE EN VIVO ---
 @app.get("/stats")
 async def get_dashboard():
     return load_stats()
